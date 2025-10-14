@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>OSM Map Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; font-family: system-ui, sans-serif; background: #f0f0f0; }
+    #map { width: 100%; height: 100vh; position: relative; overflow: hidden; }
+    #controls {
+      position: absolute;
+      top: 10px; left: 10px;
+      background: rgba(255,255,255,0.9);
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      z-index: 1000;
+    }
+    #controls button {
+      background: #0078ff;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 4px 8px;
+      margin: 2px 0;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.2s;
+    }
+    #controls button:hover { background: #005ad4; }
+    #geolocate {
+      background: #3ba755;
+    }
+    #geolocate:hover { background: #2f8c47; }
+    #attribution {
+      position: absolute;
+      bottom: 6px;
+      right: 6px;
+      font-size: 11px;
+      background: rgba(255,255,255,0.8);
+      padding: 4px 6px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="controls">
+    <button id="zoom-in">＋</button>
+    <button id="zoom-out">－</button>
+    <button id="geolocate">📍</button>
+  </div>
+  <div id="attribution">
+    © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors
+  </div>
+
+  <script>
+    class AtlasMap {
+      constructor(el, { lat = 0, lon = 0, zoom = 2, minZoom = 1, maxZoom = 19 } = {}) {
+        this.el = el;
+        this.lat = lat;
+        this.lon = lon;
+        this.zoom = zoom;
+        this.minZoom = minZoom;
+        this.maxZoom = maxZoom;
+        this.tileSize = 256;
+        this.tiles = new Map();
+        this.tileLayer = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+        this._init();
+      }
+
+      _init() {
+        this._createContainer();
+        this._bindEvents();
+        this._render();
+      }
+
+      _createContainer() {
+        this.el.style.position = "relative";
+        this.el.style.overflow = "hidden";
+        this.el.style.background = "#d0d0d0";
+
+        this.tilePane = document.createElement("div");
+        Object.assign(this.tilePane.style, {
+          position: "absolute",
+          left: 0, top: 0,
+          transformOrigin: "0 0",
+          willChange: "transform"
+        });
+        this.el.appendChild(this.tilePane);
+
+        this.markerPane = document.createElement("div");
+        Object.assign(this.markerPane.style, {
+          position: "absolute",
+          left: 0, top: 0,
+          willChange: "transform"
+        });
+        this.el.appendChild(this.markerPane);
+
+        this._updateSize();
+      }
+
+      _updateSize() {
+        this.width = this.el.clientWidth;
+        this.height = this.el.clientHeight;
+      }
+
+      _bindEvents() {
+        this.el.addEventListener("pointerdown", e => this._onDown(e));
+        window.addEventListener("pointerup", e => this._onUp(e));
+        window.addEventListener("pointermove", e => this._onMove(e));
+        this.el.addEventListener("wheel", e => this._onWheel(e));
+        window.addEventListener("resize", () => this._onResize());
+        window.addEventListener("hashchange", () => this._readPermalink());
+        this._readPermalink();
+      }
+
+      _onDown(e) {
+        this._stopMomentum();
+        this._dragging = true;
+        this._lastPos = { x: e.clientX, y: e.clientY };
+        this._velocity = { x: 0, y: 0 };
+        this._lastMove = Date.now();
+      }
+
+      _onMove(e) {
+        if (!this._dragging) return;
+        const dx = e.clientX - this._lastPos.x;
+        const dy = e.clientY - this._lastPos.y;
+        this._lastPos = { x: e.clientX, y: e.clientY };
+        const delta = this._pixelsToDeg(dx, dy);
+        this.lon -= delta.x;
+        this.lat += delta.y;
+        this._render();
+        const now = Date.now();
+        this._velocity = { x: dx / (now - this._lastMove), y: dy / (now - this._lastMove) };
+        this._lastMove = now;
+      }
+
+      _onUp() {
+        this._dragging = false;
+        this._startMomentum();
+      }
+
+      _onWheel(e) {
+        e.preventDefault();
+        const delta = Math.sign(-e.deltaY) * 0.25;
+        this._zoomTo(this.zoom + delta, { x: e.clientX, y: e.clientY });
+      }
+
+      _onResize() {
+        this._updateSize();
+        this._render();
+      }
+
+      _zoomTo(zoom, { x, y }) {
+        zoom = Math.max(this.minZoom, Math.min(this.maxZoom, zoom));
+        const before = this._project(this.lat, this.lon, this.zoom);
+        const after = this._project(this.lat, this.lon, zoom);
+        const dx = after.x - before.x;
+        const dy = after.y - before.y;
+        const offsetX = this.width / 2 - x;
+        const offsetY = this.height / 2 - y;
+        this.lon += this._pixelsToDeg(offsetX - dx, offsetY - dy).x;
+        this.lat -= this._pixelsToDeg(offsetX - dx, offsetY - dy).y;
+        this.zoom = zoom;
+        this._render();
+      }
+
+      _project(lat, lon, zoom) {
+        const rad = Math.PI / 180;
+        const scale = Math.pow(2, zoom);
+        const size = this.tileSize * scale;
+        return {
+          x: size * (lon + 180) / 360,
+          y: size * (1 - Math.log(Math.tan(lat * rad) + 1 / Math.cos(lat * rad)) / Math.PI) / 2
+        };
+      }
+
+      _unproject(x, y, zoom) {
+        const scale = Math.pow(2, zoom) * this.tileSize;
+        const lon = x / scale * 360 - 180;
+        const n = Math.PI - 2 * Math.PI * y / scale;
+        const lat = (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+        return { lat, lon };
+      }
+
+      _pixelsToDeg(dx, dy) {
+        const scale = Math.pow(2, this.zoom) * this.tileSize;
+        return { x: 360 / scale * dx, y: 360 / scale * dy };
+      }
+
+      _render() {
+        const center = this._project(this.lat, this.lon, this.zoom);
+        const centerTileX = Math.floor(center.x / this.tileSize);
+        const centerTileY = Math.floor(center.y / this.tileSize);
+        const halfX = this.width / 2 / this.tileSize;
+        const halfY = this.height / 2 / this.tileSize;
+        this.tilePane.innerHTML = "";
+        for (let x = centerTileX - halfX; x < centerTileX + halfX; x++) {
+          for (let y = centerTileY - halfY; y < centerTileY + halfY; y++) {
+            const img = document.createElement("img");
+            img.loading = "lazy";
+            img.src = this.tileLayer.replace("{z}", this.zoom).replace("{x}", x).replace("{y}", y);
+            Object.assign(img.style, {
+              position: "absolute",
+              left: x * this.tileSize - center.x + this.width / 2 + "px",
+              top: y * this.tileSize - center.y + this.height / 2 + "px",
+              width: this.tileSize + "px",
+              height: this.tileSize + "px"
+            });
+            this.tilePane.appendChild(img);
+          }
+        }
+        this._updatePermalink();
+      }
+
+      _startMomentum() {
+        if (!this._velocity) return;
+        let vx = this._velocity.x;
+        let vy = this._velocity.y;
+        const step = () => {
+          vx *= 0.9;
+          vy *= 0.9;
+          if (Math.abs(vx) < 0.01 && Math.abs(vy) < 0.01) return;
+          this.lon -= this._pixelsToDeg(vx * 16, vy * 16).x;
+          this.lat += this._pixelsToDeg(vx * 16, vy * 16).y;
+          this._render();
+          this._momentumFrame = requestAnimationFrame(step);
+        };
+        this._momentumFrame = requestAnimationFrame(step);
+      }
+
+      _stopMomentum() {
+        if (this._momentumFrame) cancelAnimationFrame(this._momentumFrame);
+      }
+
+      _updatePermalink() {
+        location.hash = `#${this.zoom.toFixed(2)}/${this.lat.toFixed(5)}/${this.lon.toFixed(5)}`;
+      }
+
+      _readPermalink() {
+        const m = location.hash.match(/#([0-9.]+)\\/([0-9.-]+)\\/([0-9.-]+)/);
+        if (m) {
+          this.zoom = parseFloat(m[1]);
+          this.lat = parseFloat(m[2]);
+          this.lon = parseFloat(m[3]);
+          this._render();
+        }
+      }
+
+      addMarker(lat, lon) {
+        const marker = document.createElement("div");
+        Object.assign(marker.style, {
+          position: "absolute",
+          width: "10px",
+          height: "10px",
+          background: "red",
+          borderRadius: "50%"
+        });
+        this.markerPane.appendChild(marker);
+        const pos = this._project(lat, lon, this.zoom);
+        const center = this._project(this.lat, this.lon, this.zoom);
+        marker.style.left = pos.x - center.x + this.width / 2 + "px";
+        marker.style.top = pos.y - center.y + this.height / 2 + "px";
+      }
+    }
+
+    const map = new AtlasMap(document.getElementById("map"), { lat: 31.7917, lon: -7.0926, zoom: 6 });
+
+    document.getElementById("zoom-in").onclick = () => map._zoomTo(map.zoom + 1, { x: map.width / 2, y: map.height / 2 });
+    document.getElementById("zoom-out").onclick = () => map._zoomTo(map.zoom - 1, { x: map.width / 2, y: map.height / 2 });
+    document.getElementById("geolocate").onclick = () => {
+      navigator.geolocation.getCurrentPosition(pos => {
+        map.lat = pos.coords.latitude;
+        map.lon = pos.coords.longitude;
+        map._render();
+      });
+    };
+  </script>
+</body>
+</html>
