@@ -1,0 +1,1906 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <title>OSM Map Viewer - Professional Edition</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { 
+      height: 100%; 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; 
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    #map.atlas-container {
+      width: 100%; 
+      height: 100%; 
+      background: #e6e6e6; 
+      position: relative;
+      user-select: none; 
+      touch-action: none;
+      overflow: hidden;
+    }
+    .atlas-map-pane,
+    .atlas-tile-pane,
+    .atlas-marker-pane,
+    .atlas-animation-pane {
+      position: absolute; 
+      top: 0; 
+      left: 0; 
+      width: 100%; 
+      height: 100%;
+    }
+    .atlas-tile-pane {
+      will-change: transform;
+    }
+    .atlas-tile {
+      position: absolute; 
+      width: 256px; 
+      height: 256px;
+      background: #f5f5f5;
+      opacity: 0;
+      transition: opacity 0.2s ease-in-out;
+      will-change: transform, opacity;
+      backface-visibility: hidden;
+      transform-origin: 0 0;
+    }
+    .atlas-tile-loaded { 
+      opacity: 1;
+    }
+    .atlas-tile-parent {
+      opacity: 0.6;
+      filter: blur(1px);
+    }
+    .atlas-tile-error {
+      opacity: 1;
+      background: repeating-linear-gradient(
+        45deg,
+        #f5f5f5,
+        #f5f5f5 10px,
+        #e8e8e8 10px,
+        #e8e8e8 20px
+      );
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #999;
+      font-size: 12px;
+    }
+    
+    /* Enhanced loading indicator */
+    .atlas-tile-pane.loading::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 48px;
+      height: 48px;
+      margin: -24px 0 0 -24px;
+      border: 4px solid rgba(255, 255, 255, 0.4);
+      border-top-color: #3498db;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      z-index: 10000;
+      pointer-events: none;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    /* Enhanced controls */
+    .controls {
+      position: absolute; 
+      top: 16px; 
+      left: 16px; 
+      z-index: 1000;
+      background: white;
+      padding: 4px;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      display: flex; 
+      flex-direction: column; 
+      gap: 1px;
+      backdrop-filter: blur(10px);
+      background: rgba(255,255,255,0.98);
+    }
+    
+    .btn {
+      width: 36px;
+      height: 36px;
+      font-size: 18px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      background: white;
+      transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+      font-weight: 600;
+      color: #333;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .btn::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 0;
+      height: 0;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.1);
+      transform: translate(-50%, -50%);
+      transition: width 0.3s, height 0.3s;
+    }
+    
+    .btn:hover::before {
+      width: 100%;
+      height: 100%;
+    }
+    
+    .btn:hover {
+      background: #f8f8f8;
+      transform: scale(1.05);
+    }
+    
+    .btn:active {
+      transform: scale(0.95);
+      background: #e8e8e8;
+    }
+    
+    .btn:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+      transform: scale(1);
+    }
+    
+    .btn:disabled:hover {
+      background: white;
+    }
+    
+    .btn-divider {
+      height: 1px;
+      background: #e0e0e0;
+      margin: 4px 0;
+    }
+    
+    /* Zoom level indicator */
+    .zoom-level {
+      position: absolute;
+      top: 16px;
+      left: 68px;
+      background: rgba(255,255,255,0.98);
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #333;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      backdrop-filter: blur(10px);
+      font-family: 'Courier New', monospace;
+      min-width: 60px;
+      text-align: center;
+      opacity: 0;
+      transform: translateX(-10px);
+      transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none;
+    }
+    
+    .zoom-level.visible {
+      opacity: 1;
+      transform: translateX(0);
+    }
+    
+    /* Enhanced coordinates display */
+    .coords {
+      position: absolute; 
+      bottom: 16px; 
+      left: 16px; 
+      font-size: 12px;
+      background: rgba(255,255,255,0.98);
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-family: 'Courier New', monospace;
+      z-index: 1000;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      line-height: 1.6;
+      backdrop-filter: blur(10px);
+      color: #333;
+    }
+    
+    .coord-line {
+      display: block;
+      white-space: nowrap;
+    }
+    
+    .coord-label {
+      color: #666;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    
+    /* Attribution */
+    .atlas-control-attribution {
+      position: absolute; 
+      bottom: 16px; 
+      right: 16px; 
+      background: rgba(255,255,255,0.98);
+      padding: 8px 12px;
+      font-size: 11px;
+      border-radius: 8px;
+      z-index: 1000;
+      max-width: 300px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      backdrop-filter: blur(10px);
+      color: #333;
+    }
+    
+    .atlas-control-attribution a {
+      color: #0078a8; 
+      text-decoration: none;
+      font-weight: 600;
+    }
+    
+    .atlas-control-attribution a:hover { 
+      text-decoration: underline; 
+    }
+    
+    /* Enhanced markers */
+    .custom-marker {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      background: #e74c3c;
+      border: 3px solid white;
+      border-radius: 50%;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      transform: translate(-50%, -50%);
+      z-index: 900;
+      pointer-events: auto;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      animation: markerDrop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    
+    @keyframes markerDrop {
+      0% {
+        transform: translate(-50%, -100%) scale(0);
+        opacity: 0;
+      }
+      100% {
+        transform: translate(-50%, -50%) scale(1);
+        opacity: 1;
+      }
+    }
+    
+    .custom-marker:hover {
+      transform: translate(-50%, -50%) scale(1.3);
+      z-index: 901;
+    }
+    
+    .custom-marker::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 32px;
+      height: 32px;
+      background: rgba(231, 76, 60, 0.2);
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { 
+        transform: translate(-50%, -50%) scale(0.8); 
+        opacity: 0.8; 
+      }
+      50% { 
+        transform: translate(-50%, -50%) scale(2); 
+        opacity: 0; 
+      }
+    }
+    
+    /* Marker tooltip */
+    .marker-tooltip {
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%) translateY(-8px);
+      background: rgba(0,0,0,0.9);
+      color: white;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s, transform 0.2s;
+      font-family: 'Courier New', monospace;
+      z-index: 1;
+    }
+    
+    .marker-tooltip::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 4px solid transparent;
+      border-top-color: rgba(0,0,0,0.9);
+    }
+    
+    .custom-marker:hover .marker-tooltip {
+      opacity: 1;
+      transform: translateX(-50%) translateY(-12px);
+    }
+    
+    /* Marker counter */
+    .marker-count {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      background: rgba(255,255,255,0.98);
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      z-index: 1000;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      backdrop-filter: blur(10px);
+      display: none;
+      color: #333;
+    }
+    
+    .marker-count.visible {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .marker-count::before {
+      content: '📍';
+      font-size: 14px;
+    }
+    
+    /* Scale control */
+    .scale-control {
+      position: absolute;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(255,255,255,0.98);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 600;
+      z-index: 1000;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      backdrop-filter: blur(10px);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #333;
+    }
+    
+    .scale-bar {
+      height: 4px;
+      background: #333;
+      border-left: 2px solid #333;
+      border-right: 2px solid #333;
+      position: relative;
+    }
+    
+    /* Touch feedback */
+    .touch-feedback {
+      position: absolute;
+      width: 60px;
+      height: 60px;
+      border: 2px solid rgba(52, 152, 219, 0.6);
+      border-radius: 50%;
+      pointer-events: none;
+      transform: translate(-50%, -50%) scale(0);
+      background: rgba(52, 152, 219, 0.1);
+      z-index: 10001;
+      animation: touchPulse 0.5s ease-out;
+    }
+    
+    @keyframes touchPulse {
+      0% {
+        transform: translate(-50%, -50%) scale(0);
+        opacity: 1;
+      }
+      100% {
+        transform: translate(-50%, -50%) scale(1);
+        opacity: 0;
+      }
+    }
+    
+    /* Crosshair for precise clicking */
+    .crosshair {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      pointer-events: none;
+      z-index: 10000;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    
+    .crosshair::before,
+    .crosshair::after {
+      content: '';
+      position: absolute;
+      background: rgba(52, 152, 219, 0.8);
+    }
+    
+    .crosshair::before {
+      width: 2px;
+      height: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    
+    .crosshair::after {
+      height: 2px;
+      width: 100%;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+    
+    .crosshair.visible {
+      opacity: 1;
+    }
+    
+    /* Responsive */
+    @media (max-width: 768px) {
+      .controls {
+        top: 12px;
+        left: 12px;
+      }
+      .coords {
+        font-size: 10px;
+        padding: 8px 10px;
+        bottom: 12px;
+        left: 12px;
+      }
+      .atlas-control-attribution {
+        font-size: 9px;
+        padding: 6px 8px;
+        max-width: 200px;
+        bottom: 12px;
+        right: 12px;
+      }
+      .marker-count {
+        font-size: 11px;
+        padding: 6px 10px;
+        top: 12px;
+        right: 12px;
+      }
+      .scale-control {
+        font-size: 10px;
+        padding: 4px 8px;
+      }
+    }
+    
+    /* Zoom animation */
+    .atlas-tile-pane.zooming .atlas-tile {
+      transition: none;
+    }
+    
+    /* Performance hint */
+    .atlas-tile-pane,
+    .atlas-marker-pane {
+      transform: translateZ(0);
+    }
+  </style>
+</head>
+<body>
+  <div id="map" class="atlas-container">
+    <div class="atlas-map-pane">
+      <div class="atlas-tile-pane"></div>
+      <div class="atlas-marker-pane"></div>
+      <div class="atlas-animation-pane"></div>
+    </div>
+
+    <div class="controls">
+      <button class="btn" id="zoomIn" title="Zoom In (Shift + ↑)">+</button>
+      <button class="btn" id="zoomOut" title="Zoom Out (Shift + ↓)">−</button>
+      <div class="btn-divider"></div>
+      <button class="btn" id="locate" title="My Location">📍</button>
+      <button class="btn" id="clearMarkers" title="Clear All Markers">🗑️</button>
+    </div>
+
+    <div class="zoom-level" id="zoomLevel">Z: 13</div>
+
+    <div class="coords" id="coords">
+      <span class="coord-line"><span class="coord-label">Lat:</span>-</span>
+      <span class="coord-line"><span class="coord-label">Lon:</span>-</span>
+      <span class="coord-line"><span class="coord-label">Zoom:</span>-</span>
+    </div>
+
+    <div class="marker-count" id="markerCount">0</div>
+
+    <div class="scale-control" id="scaleControl">
+      <div class="scale-bar" id="scaleBar"></div>
+      <span id="scaleText">0 km</span>
+    </div>
+
+    <div class="atlas-control-attribution">
+      © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors
+    </div>
+  </div>
+
+  <script>
+    class OSMMap {
+      constructor(containerId, options = {}) {
+        this._container = document.getElementById(containerId);
+        if (!this._container) throw new Error(`Container "${containerId}" not found`);
+        
+        this._tilePane = this._container.querySelector('.atlas-tile-pane');
+        this._markerPane = this._container.querySelector('.atlas-marker-pane');
+        this._animationPane = this._container.querySelector('.atlas-animation-pane');
+        
+        if (!this._tilePane || !this._markerPane) {
+          throw new Error('Required panes missing');
+        }
+
+        // Configuration
+        this._tileSize = 256;
+        this._lat = this._clampLat(options.lat ?? 51.505);
+        this._lon = this._normalizeLon(options.lon ?? -0.09);
+        this._zoom = Math.max(0, Math.min(19, options.zoom ?? 13));
+        this._minZoom = Math.max(0, options.minZoom ?? 2);
+        this._maxZoom = Math.min(19, options.maxZoom ?? 19);
+        this._zoomSnap = options.zoomSnap ?? 0.25;
+        this._zoomDelta = options.zoomDelta ?? 1;
+        
+        // Retina/HiDPI support
+        this._devicePixelRatio = window.devicePixelRatio || 1;
+        this._useRetinaTiles = options.useRetinaTiles ?? (this._devicePixelRatio > 1);
+
+        // Interaction state
+        this._isDragging = false;
+        this._dragStart = { x: 0, y: 0 };
+        this._dragDelta = { x: 0, y: 0 };
+        this._velocity = { x: 0, y: 0 };
+        this._lastDragTime = 0;
+        this._momentumFrame = null;
+        this._wasDragging = false;
+
+        // Touch state
+        this._isPinching = false;
+        this._lastPinchDistance = null;
+        this._pinchCenter = null;
+        this._lastTapTime = 0;
+        this._touchStartPos = null;
+        this._activeTouches = [];
+
+        // Tile management
+        this._tiles = new Map();
+        this._tileCache = new Map();
+        this._tileQueue = [];
+        this._loadingTiles = new Set();
+        this._maxCacheSize = options.maxCacheSize ?? 256;
+        this._tileLoadPriority = new Map();
+        this._abortControllers = new Map();
+
+        // Animation
+        this._animationFrame = null;
+        this._isAnimating = false;
+        this._targetZoom = null;
+        this._targetCenter = null;
+        this._animationStart = 0;
+        this._animationDuration = 250;
+
+        // Markers
+        this._markers = [];
+        this._markerElements = new WeakMap();
+
+        // Timeouts
+        this._coordUpdateTimeout = null;
+        this._zoomLevelTimeout = null;
+        this._tileProcessTimeout = null;
+
+        // Tile servers with better load distribution
+        this._tileServers = [
+          'https://a.tile.openstreetmap.org',
+          'https://b.tile.openstreetmap.org',
+          'https://c.tile.openstreetmap.org'
+        ];
+        this._serverIndex = 0;
+
+        // Dimensions
+        this._width = this._container.clientWidth;
+        this._height = this._container.clientHeight;
+
+        // Performance tracking
+        this._stats = {
+          tilesLoaded: 0,
+          tilesFailed: 0,
+          tileCacheHits: 0
+        };
+
+        this._init();
+      }
+
+      _init() {
+        this._setupKeyboardControls();
+        this._bindEvents();
+        this._applyPermalink();
+        this._render();
+        this._updateCoords();
+        this._updateMarkerCount();
+        this._updateScale();
+        this._startTileProcessor();
+      }
+
+      _setupKeyboardControls() {
+        document.addEventListener('keydown', (e) => {
+          if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+          
+          if (e.shiftKey) {
+            switch(e.key) {
+              case 'ArrowUp':
+                e.preventDefault();
+                this.zoomIn();
+                break;
+              case 'ArrowDown':
+                e.preventDefault();
+                this.zoomOut();
+                break;
+            }
+          } else {
+            const panAmount = 100;
+            switch(e.key) {
+              case 'ArrowUp':
+                e.preventDefault();
+                this._panBy(0, -panAmount);
+                break;
+              case 'ArrowDown':
+                e.preventDefault();
+                this._panBy(0, panAmount);
+                break;
+              case 'ArrowLeft':
+                e.preventDefault();
+                this._panBy(-panAmount, 0);
+                break;
+              case 'ArrowRight':
+                e.preventDefault();
+                this._panBy(panAmount, 0);
+                break;
+            }
+          }
+        });
+      }
+
+      _panBy(x, y) {
+        this._dragDelta.x -= x;
+        this._dragDelta.y -= y;
+        this._render();
+        this._commitDrag();
+      }
+
+      _bindEvents() {
+        // Resize handler
+        let resizeObserver;
+        if (window.ResizeObserver) {
+          resizeObserver = new ResizeObserver(() => {
+            this._width = this._container.clientWidth;
+            this._height = this._container.clientHeight;
+            this._render();
+            this._updateScale();
+          });
+          resizeObserver.observe(this._container);
+        } else {
+          let resizeThrottle;
+          window.addEventListener('resize', () => {
+            clearTimeout(resizeThrottle);
+            resizeThrottle = setTimeout(() => {
+              this._width = this._container.clientWidth;
+              this._height = this._container.clientHeight;
+              this._render();
+              this._updateScale();
+            }, 100);
+          });
+        }
+
+        // Button controls
+        const $ = id => document.getElementById(id);
+        
+        $('zoomIn')?.addEventListener('click', () => this.zoomIn());
+        $('zoomOut')?.addEventListener('click', () => this.zoomOut());
+        $('locate')?.addEventListener('click', () => this._handleGeolocation());
+        $('clearMarkers')?.addEventListener('click', () => this.clearMarkers());
+
+        // Mouse events
+        this._container.addEventListener('mousedown', this._onMouseDown.bind(this));
+        document.addEventListener('mousemove', this._onMouseMove.bind(this));
+        document.addEventListener('mouseup', this._onMouseUp.bind(this));
+
+        // Touch events
+        this._container.addEventListener('touchstart', this._onTouchStart.bind(this), { passive: false });
+        this._container.addEventListener('touchmove', this._onTouchMove.bind(this), { passive: false });
+        this._container.addEventListener('touchend', this._onTouchEnd.bind(this), { passive: false });
+        this._container.addEventListener('touchcancel', this._onTouchEnd.bind(this), { passive: false });
+
+        // Wheel event with improved easing
+        let wheelTimeout;
+        let wheelDelta = 0;
+        this._container.addEventListener('wheel', (e) => {
+          e.preventDefault();
+          
+          const rect = this._container.getBoundingClientRect();
+          const cx = e.clientX - rect.left;
+          const cy = e.clientY - rect.top;
+          
+          // Accumulate wheel delta for smoother zooming
+          wheelDelta += -Math.sign(e.deltaY) * this._zoomSnap;
+          
+          clearTimeout(wheelTimeout);
+          wheelTimeout = setTimeout(() => {
+            this._zoomToPoint(
+              Math.round(this._zoom + wheelDelta),
+              cx,
+              cy,
+              true
+            );
+            wheelDelta = 0;
+          }, 50);
+          
+          // Immediate fractional zoom for smooth feel
+          this._zoomToPoint(
+            this._zoom + (-Math.sign(e.deltaY) * this._zoomSnap),
+            cx,
+            cy,
+            false
+          );
+        }, { passive: false });
+
+        // Double click
+        this._container.addEventListener('dblclick', (e) => {
+          if (e.target.closest('.controls, .coords, .atlas-control-attribution, .marker-count')) return;
+          e.preventDefault();
+          
+          const rect = this._container.getBoundingClientRect();
+          const cx = e.clientX - rect.left;
+          const cy = e.clientY - rect.top;
+          
+          this._zoomToPoint(
+            Math.min(this._zoom + this._zoomDelta, this._maxZoom),
+            cx,
+            cy,
+            true
+          );
+        });
+
+        // Single click for markers
+        this._container.addEventListener('click', (e) => {
+          if (e.target.closest('.btn, .coords, .atlas-control-attribution, .marker-count')) return;
+          if (this._wasDragging) {
+            this._wasDragging = false;
+            return;
+          }
+          
+          const rect = this._container.getBoundingClientRect();
+          const dx = e.clientX - rect.left - this._width / 2 + this._dragDelta.x;
+          const dy = e.clientY - rect.top - this._height / 2 + this._dragDelta.y;
+          const centerPx = this._project(this._lat, this._lon, this._zoom);
+          const px = centerPx.x + dx;
+          const py = centerPx.y + dy;
+          const point = this._unproject(px, py, this._zoom);
+          
+          this.addMarker(point.lat, point.lon);
+          this._showTouchFeedback(e.clientX, e.clientY);
+        });
+
+        this._container.addEventListener('contextmenu', e => e.preventDefault());
+        window.addEventListener('hashchange', () => this._applyPermalink());
+      }
+
+      _zoomToPoint(zoom, cx, cy, snap = true) {
+        zoom = Math.max(this._minZoom, Math.min(zoom, this._maxZoom));
+        if (snap) {
+          zoom = Math.round(zoom / this._zoomSnap) * this._zoomSnap;
+        }
+        
+        const centerPx = this._project(this._lat, this._lon, this._zoom);
+        const targetPx = {
+          x: centerPx.x + (cx - this._width / 2 + this._dragDelta.x),
+          y: centerPx.y + (cy - this._height / 2 + this._dragDelta.y)
+        };
+        const targetLL = this._unproject(targetPx.x, targetPx.y, this._zoom);
+
+        const oldZoom = this._zoom;
+        this._zoom = zoom;
+
+        const newCenterPx = this._project(targetLL.lat, targetLL.lon, this._zoom);
+        const adj = {
+          x: newCenterPx.x - (cx - this._width / 2 + this._dragDelta.x),
+          y: newCenterPx.y - (cy - this._height / 2 + this._dragDelta.y)
+        };
+        const adjLL = this._unproject(adj.x, adj.y, this._zoom);
+        
+        this._lat = adjLL.lat;
+        this._lon = adjLL.lon;
+        
+        if (Math.floor(oldZoom) !== Math.floor(this._zoom)) {
+          this._clearOldTiles();
+        }
+        
+        this._render();
+        this._updateCoordsLive();
+        this._showZoomLevel();
+        this._updateScale();
+      }
+
+      _showTouchFeedback(x, y) {
+        const feedback = document.createElement('div');
+        feedback.className = 'touch-feedback';
+        feedback.style.left = x + 'px';
+        feedback.style.top = y + 'px';
+        this._animationPane.appendChild(feedback);
+        
+        setTimeout(() => feedback.remove(), 500);
+      }
+
+      _showZoomLevel() {
+        const zoomLevel = document.getElementById('zoomLevel');
+        if (zoomLevel) {
+          zoomLevel.textContent = `Z: ${Math.round(this._zoom)}`;
+          zoomLevel.classList.add('visible');
+          
+          clearTimeout(this._zoomLevelTimeout);
+          this._zoomLevelTimeout = setTimeout(() => {
+            zoomLevel.classList.remove('visible');
+          }, 1500);
+        }
+      }
+
+      _onMouseDown(e) {
+        if (e.target.closest('.controls, .coords, .atlas-control-attribution, .marker-count')) return;
+        if (e.target.closest('.custom-marker')) return;
+        
+        this._stopMomentum();
+        this._stopAnimation();
+        this._isDragging = true;
+        this._wasDragging = false;
+        this._dragStart = { x: e.clientX, y: e.clientY };
+        this._dragDelta = { x: 0, y: 0 };
+        this._lastDragTime = performance.now();
+        this._container.style.cursor = 'grabbing';
+        e.preventDefault();
+      }
+
+      _onMouseMove(e) {
+        if (!this._isDragging) return;
+        
+        const now = performance.now();
+        const dt = Math.max(1, now - this._lastDragTime);
+        const dx = e.clientX - this._dragStart.x;
+        const dy = e.clientY - this._dragStart.y;
+        
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+          this._wasDragging = true;
+        }
+        
+        this._velocity = {
+          x: (dx - this._dragDelta.x) / dt * 16,
+          y: (dy - this._dragDelta.y) / dt * 16
+        };
+        this._dragDelta = { x: dx, y: dy };
+
+        const centerPx = this._project(this._lat, this._lon, this._zoom);
+        const viewCenter = {
+          x: centerPx.x - this._dragDelta.x,
+          y: centerPx.y - this._dragDelta.y
+        };
+        const constrained = this._constrainView(viewCenter, this._zoom);
+        this._dragDelta = {
+          x: centerPx.x - constrained.x,
+          y: centerPx.y - constrained.y
+        };
+
+        this._lastDragTime = now;
+        this._render();
+        
+        clearTimeout(this._coordUpdateTimeout);
+        this._coordUpdateTimeout = setTimeout(() => this._updateCoordsLive(), 50);
+      }
+
+      _onMouseUp() {
+        if (!this._isDragging) return;
+        this._isDragging = false;
+        this._container.style.cursor = '';
+        this._startMomentum();
+      }
+
+      _onTouchStart(e) {
+        const now = performance.now();
+        this._activeTouches = Array.from(e.touches);
+        
+        if (e.touches.length === 1) {
+          if (e.target.closest('.controls, .coords, .atlas-control-attribution, .marker-count')) return;
+          if (e.target.closest('.custom-marker')) return;
+          
+          const t = e.touches[0];
+          this._touchStartPos = { x: t.clientX, y: t.clientY };
+          
+          // Double tap detection
+          if (now - this._lastTapTime < 300 && this._touchStartPos) {
+            const dist = Math.hypot(
+              t.clientX - this._touchStartPos.x,
+              t.clientY - this._touchStartPos.y
+            );
+            
+            if (dist < 20) {
+              const rect = this._container.getBoundingClientRect();
+              const cx = t.clientX - rect.left;
+              const cy = t.clientY - rect.top;
+              
+              this._zoomToPoint(
+                Math.min(this._zoom + this._zoomDelta, this._maxZoom),
+                cx,
+                cy,
+                true
+              );
+              
+              this._lastTapTime = 0;
+              e.preventDefault();
+              return;
+            }
+          }
+          
+          this._lastTapTime = now;
+          this._stopMomentum();
+          this._stopAnimation();
+          this._isDragging = true;
+          this._wasDragging = false;
+          this._dragStart = { x: t.clientX, y: t.clientY };
+          this._dragDelta = { x: 0, y: 0 };
+          this._lastDragTime = now;
+          e.preventDefault();
+          
+        } else if (e.touches.length === 2) {
+          this._isDragging = false;
+          this._isPinching = true;
+          this._lastPinchDistance = this._getTouchDistance(e.touches);
+          this._pinchCenter = this._getTouchCenter(e.touches);
+          this._tilePane.classList.add('zooming');
+          e.preventDefault();
+        }
+      }
+
+      _onTouchMove(e) {
+        this._activeTouches = Array.from(e.touches);
+        
+        if (this._isPinching && e.touches.length === 2) {
+          e.preventDefault();
+          
+          const dist = this._getTouchDistance(e.touches);
+          const center = this._getTouchCenter(e.touches);
+          const scale = dist / this._lastPinchDistance;
+          const delta = Math.log2(scale);
+          
+          let newZoom = this._zoom + delta;
+          newZoom = Math.max(this._minZoom, Math.min(newZoom, this._maxZoom));
+
+          const rect = this._container.getBoundingClientRect();
+          const focalX = this._pinchCenter.x - rect.left;
+          const focalY = this._pinchCenter.y - rect.top;
+          
+          const centerPx = this._project(this._lat, this._lon, this._zoom);
+          const focalPx = {
+            x: centerPx.x + (focalX - this._width / 2),
+            y: centerPx.y + (focalY - this._height / 2)
+          };
+          const focalLL = this._unproject(focalPx.x, focalPx.y, this._zoom);
+
+          this._zoom = newZoom;
+          const newCenterPx = this._project(focalLL.lat, focalLL.lon, this._zoom);
+          const adj = {
+            x: newCenterPx.x - (focalX - this._width / 2),
+            y: newCenterPx.y - (focalY - this._height / 2)
+          };
+          const adjLL = this._unproject(adj.x, adj.y, this._zoom);
+          
+          this._lat = adjLL.lat;
+          this._lon = adjLL.lon;
+          
+          this._render();
+          this._updateCoordsLive();
+          this._showZoomLevel();
+          
+          this._lastPinchDistance = dist;
+          this._pinchCenter = center;
+          
+        } else if (this._isDragging && e.touches.length === 1) {
+          e.preventDefault();
+          
+          const now = performance.now();
+          const dt = Math.max(1, now - this._lastDragTime);
+          const t = e.touches[0];
+          const dx = t.clientX - this._dragStart.x;
+          const dy = t.clientY - this._dragStart.y;
+          
+          if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+            this._wasDragging = true;
+          }
+          
+          this._velocity = {
+            x: (dx - this._dragDelta.x) / dt * 16,
+            y: (dy - this._dragDelta.y) / dt * 16
+          };
+          this._dragDelta = { x: dx, y: dy };
+
+          const centerPx = this._project(this._lat, this._lon, this._zoom);
+          const viewCenter = {
+            x: centerPx.x - this._dragDelta.x,
+            y: centerPx.y - this._dragDelta.y
+          };
+          const constrained = this._constrainView(viewCenter, this._zoom);
+          this._dragDelta = {
+            x: centerPx.x - constrained.x,
+            y: centerPx.y - constrained.y
+          };
+
+          this._lastDragTime = now;
+          this._render();
+          
+          clearTimeout(this._coordUpdateTimeout);
+          this._coordUpdateTimeout = setTimeout(() => this._updateCoordsLive(), 50);
+        }
+      }
+
+      _onTouchEnd(e) {
+        this._activeTouches = Array.from(e.touches);
+        
+        if (this._isPinching && e.touches.length < 2) {
+          this._isPinching = false;
+          this._lastPinchDistance = null;
+          this._pinchCenter = null;
+          this._tilePane.classList.remove('zooming');
+          
+          const targetZoom = Math.round(this._zoom / this._zoomSnap) * this._zoomSnap;
+          this.setZoom(targetZoom, this._lat, this._lon);
+          
+        } else if (this._isDragging && e.touches.length === 0) {
+          this._isDragging = false;
+          this._startMomentum();
+        }
+      }
+
+      _getTouchDistance(touches) {
+        return Math.hypot(
+          touches[0].clientX - touches[1].clientX,
+          touches[0].clientY - touches[1].clientY
+        );
+      }
+
+      _getTouchCenter(touches) {
+        return {
+          x: (touches[0].clientX + touches[1].clientX) / 2,
+          y: (touches[0].clientY + touches[1].clientY) / 2
+        };
+      }
+
+      _handleGeolocation() {
+        if (!navigator.geolocation) {
+          alert('Geolocation is not supported by your browser');
+          return;
+        }
+        
+        const locateBtn = document.getElementById('locate');
+        if (locateBtn) {
+          locateBtn.disabled = true;
+          locateBtn.style.opacity = '0.5';
+        }
+        
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            this.flyTo(pos.coords.latitude, pos.coords.longitude, 16);
+            this.addMarker(pos.coords.latitude, pos.coords.longitude);
+            
+            if (locateBtn) {
+              locateBtn.disabled = false;
+              locateBtn.style.opacity = '1';
+            }
+          },
+          (err) => {
+            console.error('Geolocation error:', err);
+            alert(`Location unavailable: ${err.message}`);
+            
+            if (locateBtn) {
+              locateBtn.disabled = false;
+              locateBtn.style.opacity = '1';
+            }
+          },
+          {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0
+          }
+        );
+      }
+
+      // Public API methods
+      zoomIn() {
+        const newZoom = Math.min(
+          this._zoom + this._zoomDelta,
+          this._maxZoom
+        );
+        this.setZoom(newZoom, this._lat, this._lon, true);
+      }
+
+      zoomOut() {
+        const newZoom = Math.max(
+          this._zoom - this._zoomDelta,
+          this._minZoom
+        );
+        this.setZoom(newZoom, this._lat, this._lon, true);
+      }
+
+      setZoom(zoom, lat = this._lat, lon = this._lon, animate = false) {
+        zoom = Math.max(this._minZoom, Math.min(zoom, this._maxZoom));
+        lat = this._clampLat(lat);
+        lon = this._normalizeLon(lon);
+        
+        if (animate && Math.abs(zoom - this._zoom) < 3) {
+          this._animateZoom(zoom, lat, lon);
+        } else {
+          this._stopMomentum();
+          this._stopAnimation();
+          
+          const oldZoom = this._zoom;
+          this._zoom = zoom;
+          this._lat = lat;
+          this._lon = lon;
+          this._dragDelta = { x: 0, y: 0 };
+          this._velocity = { x: 0, y: 0 };
+          
+          if (Math.floor(oldZoom) !== Math.floor(this._zoom)) {
+            this._clearOldTiles();
+          }
+          
+          this._render();
+          this._updateCoords();
+          this._updateZoomButtons();
+          this._updateScale();
+          this._showZoomLevel();
+        }
+      }
+
+      flyTo(lat, lon, zoom = this._zoom, duration = 1000) {
+        this._stopMomentum();
+        this._stopAnimation();
+        
+        const startLat = this._lat;
+        const startLon = this._lon;
+        const startZoom = this._zoom;
+        const targetLat = this._clampLat(lat);
+        const targetLon = this._normalizeLon(lon);
+        const targetZoom = Math.max(this._minZoom, Math.min(zoom, this._maxZoom));
+        
+        const start = performance.now();
+        this._isAnimating = true;
+        
+        const animate = (now) => {
+          const elapsed = now - start;
+          const t = Math.min(elapsed / duration, 1);
+          
+          // Easing function (ease-in-out)
+          const eased = t < 0.5
+            ? 2 * t * t
+            : -1 + (4 - 2 * t) * t;
+          
+          this._zoom = startZoom + (targetZoom - startZoom) * eased;
+          this._lat = startLat + (targetLat - startLat) * eased;
+          
+          // Handle longitude wrapping
+          let lonDiff = targetLon - startLon;
+          if (lonDiff > 180) lonDiff -= 360;
+          if (lonDiff < -180) lonDiff += 360;
+          this._lon = this._normalizeLon(startLon + lonDiff * eased);
+          
+          this._render();
+          this._updateCoordsLive();
+          
+          if (t < 1) {
+            this._animationFrame = requestAnimationFrame(animate);
+          } else {
+            this._isAnimating = false;
+            this._zoom = targetZoom;
+            this._lat = targetLat;
+            this._lon = targetLon;
+            this._clearOldTiles();
+            this._render();
+            this._updateCoords();
+            this._updateScale();
+          }
+        };
+        
+        this._animationFrame = requestAnimationFrame(animate);
+      }
+
+      _animateZoom(targetZoom, lat, lon) {
+        this._stopAnimation();
+        
+        const startZoom = this._zoom;
+        const startLat = this._lat;
+        const startLon = this._lon;
+        const start = performance.now();
+        const duration = 250;
+        
+        this._isAnimating = true;
+        this._tilePane.classList.add('zooming');
+        
+        const animate = (now) => {
+          const elapsed = now - start;
+          const t = Math.min(elapsed / duration, 1);
+          const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+          
+          this._zoom = startZoom + (targetZoom - startZoom) * eased;
+          this._lat = startLat + (lat - startLat) * eased;
+          this._lon = startLon + (lon - startLon) * eased;
+          
+          this._render();
+          this._updateCoordsLive();
+          
+          if (t < 1) {
+            this._animationFrame = requestAnimationFrame(animate);
+          } else {
+            this._isAnimating = false;
+            this._tilePane.classList.remove('zooming');
+            this._zoom = targetZoom;
+            this._lat = lat;
+            this._lon = lon;
+            this._clearOldTiles();
+            this._render();
+            this._updateCoords();
+            this._updateZoomButtons();
+            this._updateScale();
+          }
+        };
+        
+        this._animationFrame = requestAnimationFrame(animate);
+      }
+
+      _stopAnimation() {
+        if (this._animationFrame) {
+          cancelAnimationFrame(this._animationFrame);
+          this._animationFrame = null;
+          this._isAnimating = false;
+          this._tilePane.classList.remove('zooming');
+        }
+      }
+
+      _startMomentum() {
+        const speed = Math.hypot(this._velocity.x, this._velocity.y);
+        
+        if (speed < 1) {
+          this._commitDrag();
+          return;
+        }
+        
+        const start = performance.now();
+        const startVel = { ...this._velocity };
+        const friction = 0.92;
+        const minSpeed = 0.1;
+        
+        const animate = () => {
+          const elapsed = performance.now() - start;
+          const decay = Math.pow(friction, elapsed / 16);
+          const vx = startVel.x * decay;
+          const vy = startVel.y * decay;
+          
+          if (Math.hypot(vx, vy) < minSpeed) {
+            this._commitDrag();
+            return;
+          }
+          
+          this._dragDelta.x += vx;
+          this._dragDelta.y += vy;
+
+          const centerPx = this._project(this._lat, this._lon, this._zoom);
+          const viewCenter = {
+            x: centerPx.x - this._dragDelta.x,
+            y: centerPx.y - this._dragDelta.y
+          };
+          const constrained = this._constrainView(viewCenter, this._zoom);
+          this._dragDelta = {
+            x: centerPx.x - constrained.x,
+            y: centerPx.y - constrained.y
+          };
+
+          this._render();
+          this._updateCoordsLive();
+          this._momentumFrame = requestAnimationFrame(animate);
+        };
+        
+        this._momentumFrame = requestAnimationFrame(animate);
+      }
+
+      _stopMomentum() {
+        if (this._momentumFrame) {
+          cancelAnimationFrame(this._momentumFrame);
+          this._momentumFrame = null;
+        }
+      }
+
+      _commitDrag() {
+        const centerPx = this._project(this._lat, this._lon, this._zoom);
+        const newCenterPx = {
+          x: centerPx.x - this._dragDelta.x,
+          y: centerPx.y - this._dragDelta.y
+        };
+        const constrained = this._constrainView(newCenterPx, this._zoom);
+        const newCenter = this._unproject(constrained.x, constrained.y, this._zoom);
+        
+        this._lat = newCenter.lat;
+        this._lon = newCenter.lon;
+        this._dragDelta = { x: 0, y: 0 };
+        this._velocity = { x: 0, y: 0 };
+        
+        this._clearOldTiles();
+        this._render();
+        this._updateCoords();
+        this._updateScale();
+      }
+
+      // Projection methods
+      _clampLat(lat) {
+        return Math.max(-85.05112877980659, Math.min(85.05112877980659, lat));
+      }
+
+      _normalizeLon(lon) {
+        return ((lon + 180) % 360 + 360) % 360 - 180;
+      }
+
+      _project(lat, lon, zoom) {
+        lat = this._clampLat(lat);
+        const sin = Math.sin(lat * Math.PI / 180);
+        const z = Math.pow(2, zoom);
+        const x = this._tileSize * z * (lon + 180) / 360;
+        const y = this._tileSize * z * (1 - Math.log((1 + sin) / (1 - sin)) / (2 * Math.PI)) / 2;
+        return { x, y };
+      }
+
+      _unproject(x, y, zoom) {
+        const z = Math.pow(2, zoom);
+        const worldSize = this._tileSize * z;
+        const lon = x / worldSize * 360 - 180;
+        const n = Math.PI - (2 * Math.PI * y) / worldSize;
+        const lat = (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+        return { lat: this._clampLat(lat), lon: this._normalizeLon(lon) };
+      }
+
+      _getWorldBounds(zoom) {
+        const worldSize = this._tileSize * Math.pow(2, zoom);
+        return { x: 0, y: 0, width: worldSize, height: worldSize };
+      }
+
+      _constrainView(centerPx, zoom) {
+        const world = this._getWorldBounds(zoom);
+        const halfH = this._height / 2;
+        const minY = halfH;
+        const maxY = world.height - halfH;
+        
+        let y = centerPx.y;
+        if (y < minY) y = minY;
+        if (y > maxY) y = maxY;
+        
+        return { x: centerPx.x, y };
+      }
+
+      // Tile management
+      _getVisibleTiles() {
+        const z = Math.floor(this._zoom);
+        const center = this._project(this._lat, this._lon, z);
+        const cx = center.x - this._dragDelta.x;
+        const cy = center.y - this._dragDelta.y;
+
+        const buffer = 1;
+        const halfW = this._width / 2;
+        const halfH = this._height / 2;
+        const startX = Math.floor((cx - halfW) / this._tileSize) - buffer;
+        const endX = Math.ceil((cx + halfW) / this._tileSize) + buffer;
+        const startY = Math.floor((cy - halfH) / this._tileSize) - buffer;
+        const endY = Math.ceil((cy + halfH) / this._tileSize) + buffer;
+
+        const max = Math.pow(2, z);
+        const tiles = [];
+        
+        // Calculate distance from center for prioritization
+        const centerTileX = Math.floor(cx / this._tileSize);
+        const centerTileY = Math.floor(cy / this._tileSize);
+        
+        for (let x = startX; x <= endX; x++) {
+          for (let y = startY; y <= endY; y++) {
+            if (y >= 0 && y < max) {
+              const wrappedX = ((x % max) + max) % max;
+              const dist = Math.hypot(x - centerTileX, y - centerTileY);
+              tiles.push({ 
+                x: wrappedX, 
+                y, 
+                z,
+                originalX: x,
+                priority: -dist  // Negative so closer tiles have higher priority
+              });
+            }
+          }
+        }
+        
+        // Sort by priority (closest tiles first)
+        tiles.sort((a, b) => b.priority - a.priority);
+        
+        return tiles;
+      }
+
+      _startTileProcessor() {
+        const processTiles = () => {
+          if (this._tileQueue.length > 0 && this._loadingTiles.size < 6) {
+            const tile = this._tileQueue.shift();
+            if (tile) {
+              this._loadTile(tile);
+            }
+          }
+          
+          this._tileProcessTimeout = setTimeout(processTiles, 50);
+        };
+        
+        processTiles();
+      }
+
+      _getTileKey(z, x, y) {
+        return `${z}/${x}/${y}`;
+      }
+
+      _loadTile(tileInfo) {
+        const key = this._getTileKey(tileInfo.z, tileInfo.x, tileInfo.y);
+        
+        // Check cache first
+        if (this._tileCache.has(key)) {
+          this._stats.tileCacheHits++;
+          const cachedImg = this._tileCache.get(key).cloneNode();
+          cachedImg.className = 'atlas-tile atlas-tile-loaded';
+          this._tiles.set(key, cachedImg);
+          this._tilePane.appendChild(cachedImg);
+          this._positionTile(tileInfo, cachedImg);
+          return;
+        }
+        
+        // Check if already loading
+        if (this._loadingTiles.has(key)) return;
+        
+        const img = new Image();
+        img.className = 'atlas-tile';
+        img.crossOrigin = 'anonymous';
+        
+        this._loadingTiles.add(key);
+        this._updateLoadingState();
+        
+        const abortController = new AbortController();
+        this._abortControllers.set(key, abortController);
+        
+        let attempt = 0;
+        let loaded = false;
+        
+        const tryLoad = () => {
+          if (abortController.signal.aborted) return;
+          
+          const server = this._tileServers[(this._serverIndex++) % this._tileServers.length];
+          const retinaSuffix = this._useRetinaTiles && tileInfo.z < this._maxZoom ? '@2x' : '';
+          img.src = `${server}/${tileInfo.z}/${tileInfo.x}/${tileInfo.y}${retinaSuffix}.png`;
+        };
+        
+        img.onload = () => {
+          if (!loaded && !abortController.signal.aborted) {
+            loaded = true;
+            this._loadingTiles.delete(key);
+            this._abortControllers.delete(key);
+            this._updateLoadingState();
+            
+            img.classList.add('atlas-tile-loaded');
+            this._stats.tilesLoaded++;
+            
+            // Add to cache
+            this._addToCache(key, img);
+          }
+        };
+        
+        img.onerror = () => {
+          if (!loaded && !abortController.signal.aborted) {
+            attempt++;
+            if (attempt < 3) {
+              setTimeout(tryLoad, 100 * attempt);
+            } else {
+              loaded = true;
+              this._loadingTiles.delete(key);
+              this._abortControllers.delete(key);
+              this._updateLoadingState();
+              
+              img.classList.add('atlas-tile-error');
+              img.textContent = '✕';
+              this._stats.tilesFailed++;
+            }
+          }
+        };
+        
+        tryLoad();
+        this._tilePane.appendChild(img);
+        this._tiles.set(key, img);
+      }
+
+      _addToCache(key, img) {
+        if (this._tileCache.size >= this._maxCacheSize) {
+          // Remove oldest entry (first entry)
+          const firstKey = this._tileCache.keys().next().value;
+          this._tileCache.delete(firstKey);
+        }
+        
+        this._tileCache.set(key, img.cloneNode());
+      }
+
+      _positionTile(tileInfo, el) {
+        const center = this._project(this._lat, this._lon, this._zoom);
+        const scale = Math.pow(2, this._zoom - Math.floor(this._zoom));
+        const left = tileInfo.originalX * this._tileSize - (center.x - this._dragDelta.x) + this._width / 2;
+        const top = tileInfo.y * this._tileSize - (center.y - this._dragDelta.y) + this._height / 2;
+        
+        el.style.transform = `translate(${left.toFixed(2)}px, ${top.toFixed(2)}px) scale(${scale.toFixed(4)})`;
+        el.style.imageRendering = scale < 0.95 ? 'auto' : scale > 1.05 ? 'pixelated' : 'auto';
+      }
+
+      _render() {
+        const visible = this._getVisibleTiles();
+        const existing = new Set();
+        const center = this._project(this._lat, this._lon, this._zoom);
+
+        // Update existing tiles and add new ones to queue
+        for (const tile of visible) {
+          const key = this._getTileKey(tile.z, tile.x, tile.y);
+          existing.add(key);
+
+          if (this._tiles.has(key)) {
+            // Update position of existing tile
+            const el = this._tiles.get(key);
+            this._positionTile(tile, el);
+          } else {
+            // Add to queue for loading
+            if (!this._tileQueue.find(t => 
+              t.z === tile.z && t.x === tile.x && t.y === tile.y
+            )) {
+              this._tileQueue.push(tile);
+              this._tileQueue.sort((a, b) => b.priority - a.priority);
+            }
+          }
+        }
+
+        // Remove tiles that are no longer visible
+        for (const [key, img] of this._tiles) {
+          if (!existing.has(key)) {
+            // Cancel loading if still in progress
+            if (this._abortControllers.has(key)) {
+              this._abortControllers.get(key).abort();
+              this._abortControllers.delete(key);
+              this._loadingTiles.delete(key);
+            }
+            
+            img.remove();
+            this._tiles.delete(key);
+          }
+        }
+
+        // Remove tiles from queue that are no longer needed
+        this._tileQueue = this._tileQueue.filter(tile => {
+          const key = this._getTileKey(tile.z, tile.x, tile.y);
+          return existing.has(key);
+        });
+
+        this._renderMarkers();
+        this._updateLoadingState();
+      }
+
+      _clearOldTiles() {
+        const currentZoom = Math.floor(this._zoom);
+        
+        for (const [key, img] of this._tiles) {
+          const z = parseInt(key.split('/')[0]);
+          if (z !== currentZoom) {
+            if (this._abortControllers.has(key)) {
+              this._abortControllers.get(key).abort();
+              this._abortControllers.delete(key);
+              this._loadingTiles.delete(key);
+            }
+            img.remove();
+            this._tiles.delete(key);
+          }
+        }
+        
+        this._tileQueue = [];
+      }
+
+      _updateLoadingState() {
+        if (this._loadingTiles.size > 0) {
+          this._tilePane.classList.add('loading');
+        } else {
+          this._tilePane.classList.remove('loading');
+        }
+      }
+
+      // Marker management
+      addMarker(lat, lon, options = {}) {
+        const marker = {
+          lat: this._clampLat(lat),
+          lon: this._normalizeLon(lon),
+          ...options
+        };
+        
+        this._markers.push(marker);
+        this._renderMarkers();
+        this._updateMarkerCount();
+        
+        return marker;
+      }
+
+      removeMarker(marker) {
+        const index = this._markers.indexOf(marker);
+        if (index > -1) {
+          this._markers.splice(index, 1);
+          this._renderMarkers();
+          this._updateMarkerCount();
+        }
+      }
+
+      clearMarkers() {
+        this._markers = [];
+        this._renderMarkers();
+        this._updateMarkerCount();
+      }
+
+      _renderMarkers() {
+        this._markerPane.innerHTML = '';
+        const center = this._project(this._lat, this._lon, this._zoom);
+        
+        for (const m of this._markers) {
+          const p = this._project(m.lat, m.lon, this._zoom);
+          const x = p.x - (center.x - this._dragDelta.x) + this._width / 2;
+          const y = p.y - (center.y - this._dragDelta.y) + this._height / 2;
+          
+          // Cull markers outside viewport (with buffer)
+          if (x >= -100 && x <= this._width + 100 && y >= -100 && y <= this._height + 100) {
+            const el = document.createElement('div');
+            el.className = 'custom-marker';
+            el.style.left = `${x}px`;
+            el.style.top = `${y}px`;
+            
+            const tooltip = document.createElement('div');
+            tooltip.className = 'marker-tooltip';
+            tooltip.textContent = `${m.lat.toFixed(5)}, ${m.lon.toFixed(5)}`;
+            el.appendChild(tooltip);
+            
+            // Add click handler for marker removal
+            el.addEventListener('click', (e) => {
+              e.stopPropagation();
+              if (confirm('Remove this marker?')) {
+                this.removeMarker(m);
+              }
+            });
+            
+            this._markerPane.appendChild(el);
+            this._markerElements.set(m, el);
+          }
+        }
+      }
+
+      _updateMarkerCount() {
+        const countEl = document.getElementById('markerCount');
+        if (countEl) {
+          if (this._markers.length > 0) {
+            countEl.textContent = `${this._markers.length}`;
+            countEl.classList.add('visible');
+          } else {
+            countEl.classList.remove('visible');
+          }
+        }
+      }
+
+      // UI updates
+      _updateCoords() {
+        const coordsEl = document.getElementById('coords');
+        if (coordsEl) {
+          coordsEl.innerHTML = `
+            <span class="coord-line"><span class="coord-label">Lat:</span>${this._lat.toFixed(6)}</span>
+            <span class="coord-line"><span class="coord-label">Lon:</span>${this._lon.toFixed(6)}</span>
+            <span class="coord-line"><span class="coord-label">Zoom:</span>${this._zoom.toFixed(2)}</span>
+          `;
+        }
+        this._updatePermalink();
+        this._updateZoomButtons();
+      }
+
+      _updateCoordsLive() {
+        const centerPx = this._project(this._lat, this._lon, this._zoom);
+        const newCenterPx = {
+          x: centerPx.x - this._dragDelta.x,
+          y: centerPx.y - this._dragDelta.y
+        };
+        const newCenter = this._unproject(newCenterPx.x, newCenterPx.y, this._zoom);
+        
+        const coordsEl = document.getElementById('coords');
+        if (coordsEl) {
+          coordsEl.innerHTML = `
+            <span class="coord-line"><span class="coord-label">Lat:</span>${newCenter.lat.toFixed(6)}</span>
+            <span class="coord-line"><span class="coord-label">Lon:</span>${newCenter.lon.toFixed(6)}</span>
+            <span class="coord-line"><span class="coord-label">Zoom:</span>${this._zoom.toFixed(2)}</span>
+          `;
+        }
+      }
+
+      _updateZoomButtons() {
+        const zoomInBtn = document.getElementById('zoomIn');
+        const zoomOutBtn = document.getElementById('zoomOut');
+        
+        if (zoomInBtn) {
+          zoomInBtn.disabled = this._zoom >= this._maxZoom;
+        }
+        if (zoomOutBtn) {
+          zoomOutBtn.disabled = this._zoom <= this._minZoom;
+        }
+      }
+
+      _updateScale() {
+        const scaleBar = document.getElementById('scaleBar');
+        const scaleText = document.getElementById('scaleText');
+        
+        if (!scaleBar || !scaleText) return;
+        
+        // Calculate meters per pixel at current zoom and latitude
+        const metersPerPixel = 156543.03392 * Math.cos(this._lat * Math.PI / 180) / Math.pow(2, this._zoom);
+        
+        // Find nice round number for scale
+        const maxWidth = 150; // pixels
+        const maxMeters = metersPerPixel * maxWidth;
+        
+        let scale, unit, text;
+        if (maxMeters > 1000) {
+          const km = maxMeters / 1000;
+          if (km > 100) scale = Math.floor(km / 100) * 100 * 1000;
+          else if (km > 10) scale = Math.floor(km / 10) * 10 * 1000;
+          else scale = Math.floor(km) * 1000;
+          
+          unit = 'km';
+          text = (scale / 1000).toFixed(0);
+        } else {
+          if (maxMeters > 1000) scale = 1000;
+          else if (maxMeters > 500) scale = 500;
+          else if (maxMeters > 200) scale = 200;
+          else if (maxMeters > 100) scale = 100;
+          else if (maxMeters > 50) scale = 50;
+          else if (maxMeters > 20) scale = 20;
+          else scale = 10;
+          
+          unit = 'm';
+          text = scale.toFixed(0);
+        }
+        
+        const width = scale / metersPerPixel;
+        scaleBar.style.width = width + 'px';
+        scaleText.textContent = `${text} ${unit}`;
+      }
+
+      _applyPermalink() {
+        const match = location.hash.match(/#([\d.]+)\/([-\d.]+)\/([-\d.]+)/);
+        if (match) {
+          const z = parseFloat(match[1]);
+          const lat = parseFloat(match[2]);
+          const lon = parseFloat(match[3]);
+          
+          if (!isNaN(z) && !isNaN(lat) && !isNaN(lon)) {
+            this.setZoom(z, lat, lon, false);
+          }
+        }
+      }
+
+      _updatePermalink() {
+        const hash = `#${this._zoom.toFixed(2)}/${this._lat.toFixed(6)}/${this._lon.toFixed(6)}`;
+        if (location.hash !== hash) {
+          history.replaceState(null, '', hash);
+        }
+      }
+
+      // Getters
+      getCenter() {
+        return { lat: this._lat, lon: this._lon };
+      }
+
+      getZoom() {
+        return this._zoom;
+      }
+
+      getMarkers() {
+        return [...this._markers];
+      }
+
+      getBounds() {
+        const halfW = this._width / 2;
+        const halfH = this._height / 2;
+        const center = this._project(this._lat, this._lon, this._zoom);
+        
+        const nw = this._unproject(center.x - halfW, center.y - halfH, this._zoom);
+        const se = this._unproject(center.x + halfW, center.y + halfH, this._zoom);
+        
+        return {
+          north: nw.lat,
+          south: se.lat,
+          west: nw.lon,
+          east: se.lon
+        };
+      }
+
+      getStats() {
+        return {
+          ...this._stats,
+          activeTiles: this._tiles.size,
+          cachedTiles: this._tileCache.size,
+          queuedTiles: this._tileQueue.length,
+          loadingTiles: this._loadingTiles.size
+        };
+      }
+
+      // Cleanup
+      destroy() {
+        this._stopMomentum();
+        this._stopAnimation();
+        
+        clearTimeout(this._coordUpdateTimeout);
+        clearTimeout(this._zoomLevelTimeout);
+        clearTimeout(this._tileProcessTimeout);
+        
+        for (const controller of this._abortControllers.values()) {
+          controller.abort();
+        }
+        
+        this._tiles.clear();
+        this._tileCache.clear();
+        this._markers = [];
+        
+        this._container.innerHTML = '';
+      }
+    }
+
+    // Initialize map
+    const map = new OSMMap('map', {
+      lat: 51.505,
+      lon: -0.09,
+      zoom: 13,
+      minZoom: 2,
+      maxZoom: 19,
+      zoomSnap: 0.25,
+      zoomDelta: 1,
+      useRetinaTiles: false, // Set to true for HiDPI displays
+      maxCacheSize: 256
+    });
+
+    // Expose to window
+    window.map = map;
+
+    // Log stats periodically
+    setInterval(() => {
+      console.log('Map Stats:', map.getStats());
+    }, 10000);
+
+    console.log('🗺️ OSM Map Viewer - Professional Edition');
+    console.log('Controls: Click to add markers, Double-click to zoom, Drag to pan');
+    console.log('Keyboard: Arrow keys to pan, Shift + ↑/↓ to zoom');
+    console.log('Available methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(map)).filter(m => !m.startsWith('_') && m !== 'constructor'));
+  </script>
+</body>
+</html>
