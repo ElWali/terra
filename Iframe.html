@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pure JavaScript OSM Map Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+            background: #aad3df;
+            position: relative;
+            overflow: hidden;
+            cursor: grab;
+            touch-action: none;
+        }
+
+        #map.dragging {
+            cursor: grabbing;
+        }
+
+        .tile {
+            position: absolute;
+            width: 256px;
+            height: 256px;
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+        }
+
+        .controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        .btn {
+            width: 36px;
+            height: 36px;
+            border: none;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 20px;
+            font-weight: bold;
+            color: #333;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            background: #f0f0f0;
+            transform: scale(1.05);
+        }
+
+        .btn:active {
+            transform: scale(0.95);
+        }
+
+        .coords {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: monospace;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            z-index: 1000;
+        }
+
+        .attribution {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            z-index: 1000;
+        }
+
+        .attribution a {
+            color: #0078A8;
+            text-decoration: none;
+        }
+
+        .attribution a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div id="map">
+        <div class="controls">
+            <button class="btn" id="zoomIn" title="Zoom In">+</button>
+            <button class="btn" id="zoomOut" title="Zoom Out">−</button>
+        </div>
+        <div class="coords" id="coords">
+            Lat: 0.0000, Lon: 0.0000 | Zoom: 2
+        </div>
+        <div class="attribution">
+            © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors
+        </div>
+    </div>
+
+    <script>
+        class OSMMap {
+            constructor(containerId, options = {}) {
+                this.container = document.getElementById(containerId);
+                this.width = this.container.clientWidth;
+                this.height = this.container.clientHeight;
+                
+                // Map state
+                this.lat = options.lat ?? 0;
+                this.lon = options.lon ?? 0;
+                this.zoom = options.zoom ?? 2;
+                this.minZoom = options.minZoom ?? 2;
+                this.maxZoom = options.maxZoom ?? 18;
+                
+                // Tile management
+                this.tiles = new Map();
+                this.tileSize = 256;
+                
+                // Dragging state
+                this.isDragging = false;
+                this.dragStart = { x: 0, y: 0 };
+                this.dragOffset = { x: 0, y: 0 };
+                
+                // OSM tile servers
+                this.tileServers = [
+                    'https://a.tile.openstreetmap.org',
+                    'https://b.tile.openstreetmap.org',
+                    'https://c.tile.openstreetmap.org'
+                ];
+                
+                this.init();
+            }
+            
+            init() {
+                this.setupEventListeners();
+                this.render();
+                this.updateCoords();
+            }
+            
+            // Convert lat/lon to pixel position
+            latLonToPixel(lat, lon, zoom) {
+                const scale = Math.pow(2, zoom);
+                const worldSize = this.tileSize * scale;
+                
+                const x = (lon + 180) / 360 * worldSize;
+                const latRad = lat * Math.PI / 180;
+                const y = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * worldSize;
+                
+                return { x, y };
+            }
+            
+            // Convert pixel position to lat/lon
+            pixelToLatLon(x, y, zoom) {
+                const scale = Math.pow(2, zoom);
+                const worldSize = this.tileSize * scale;
+                
+                const lon = x / worldSize * 360 - 180;
+                const latRad = Math.PI * (1 - 2 * y / worldSize);
+                const lat = Math.atan(Math.sinh(latRad)) * 180 / Math.PI;
+                
+                return { lat, lon };
+            }
+            
+            // Get visible tiles
+            getVisibleTiles() {
+                const center = this.latLonToPixel(this.lat, this.lon, this.zoom);
+                const centerX = center.x + this.dragOffset.x;
+                const centerY = center.y + this.dragOffset.y;
+                
+                const halfWidth = this.width / 2;
+                const halfHeight = this.height / 2;
+                
+                const topLeft = {
+                    x: (centerX - halfWidth) / this.tileSize,
+                    y: (centerY - halfHeight) / this.tileSize
+                };
+                
+                const bottomRight = {
+                    x: (centerX + halfWidth) / this.tileSize,
+                    y: (centerY + halfHeight) / this.tileSize
+                };
+                
+                const tiles = [];
+                const maxTile = Math.pow(2, this.zoom) - 1;
+                
+                for (let x = Math.floor(topLeft.x) - 1; x <= Math.ceil(bottomRight.x) + 1; x++) {
+                    for (let y = Math.floor(topLeft.y) - 1; y <= Math.ceil(bottomRight.y) + 1; y++) {
+                        // Wrap X coordinate
+                        let wrappedX = x;
+                        while (wrappedX < 0) wrappedX += maxTile + 1;
+                        while (wrappedX > maxTile) wrappedX -= maxTile + 1;
+                        
+                        // Clamp Y coordinate
+                        if (y < 0 || y > maxTile) continue;
+                        
+                        tiles.push({ x: wrappedX, y, originalX: x });
+                    }
+                }
+                
+                return tiles;
+            }
+            
+            // Render tiles
+            render() {
+                const visibleTiles = this.getVisibleTiles();
+                const center = this.latLonToPixel(this.lat, this.lon, this.zoom);
+                const centerX = center.x + this.dragOffset.x;
+                const centerY = center.y + this.dragOffset.y;
+                
+                const existingTiles = new Set();
+                
+                visibleTiles.forEach(tile => {
+                    const key = `${this.zoom}/${tile.x}/${tile.y}`;
+                    existingTiles.add(key);
+                    
+                    if (!this.tiles.has(key)) {
+                        this.createTile(tile.x, tile.y, tile.originalX);
+                    }
+                    
+                    const tileElement = this.tiles.get(key);
+                    if (tileElement) {
+                        const left = (tile.originalX * this.tileSize - centerX) + this.width / 2;
+                        const top = (tile.y * this.tileSize - centerY) + this.height / 2;
+                        tileElement.style.transform = `translate(${left}px, ${top}px)`;
+                    }
+                });
+                
+                // Remove invisible tiles
+                this.tiles.forEach((tileElement, key) => {
+                    if (!existingTiles.has(key)) {
+                        tileElement.remove();
+                        this.tiles.delete(key);
+                    }
+                });
+            }
+            
+            // Create tile element
+            createTile(x, y, originalX) {
+                const key = `${this.zoom}/${x}/${y}`;
+                const img = document.createElement('img');
+                img.className = 'tile';
+                
+                const serverIndex = (x + y) % this.tileServers.length;
+                const server = this.tileServers[serverIndex];
+                
+                img.src = `${server}/${this.zoom}/${x}/${y}.png`;
+                img.alt = '';
+                img.loading = 'lazy';
+                img.onerror = () => { img.style.background = '#f0f0f0'; };
+                
+                this.container.appendChild(img);
+                this.tiles.set(key, img);
+            }
+            
+            // Clear all tiles
+            clearTiles() {
+                this.tiles.forEach(tile => tile.remove());
+                this.tiles.clear();
+            }
+            
+            // Set zoom level
+            setZoom(zoom, centerLat = this.lat, centerLon = this.lon) {
+                zoom = Math.max(this.minZoom, Math.min(this.maxZoom, Math.floor(zoom)));
+                
+                if (zoom !== this.zoom) {
+                    this.zoom = zoom;
+                    this.lat = centerLat;
+                    this.lon = centerLon;
+                    this.dragOffset = { x: 0, y: 0 };
+                    this.clearTiles();
+                    this.render();
+                    this.updateCoords();
+                }
+            }
+            
+            // Pan to location
+            panTo(lat, lon) {
+                this.lat = Math.max(-85.0511, Math.min(85.0511, lat));
+                this.lon = ((lon + 180) % 360) - 180;
+                this.dragOffset = { x: 0, y: 0 };
+                this.render();
+                this.updateCoords();
+            }
+            
+            // Update coordinates display
+            updateCoords() {
+                const coordsElement = document.getElementById('coords');
+                if (coordsElement) {
+                    coordsElement.textContent = `Lat: ${this.lat.toFixed(4)}, Lon: ${this.lon.toFixed(4)} | Zoom: ${this.zoom}`;
+                }
+            }
+            
+            // Setup event listeners
+            setupEventListeners() {
+                this.container.addEventListener('mousedown', this.onDragStart.bind(this));
+                this.container.addEventListener('mousemove', this.onDragMove.bind(this));
+                this.container.addEventListener('mouseup', this.onDragEnd.bind(this));
+                this.container.addEventListener('mouseleave', this.onDragEnd.bind(this));
+                
+                this.container.addEventListener('touchstart', this.onDragStart.bind(this), { passive: false });
+                this.container.addEventListener('touchmove', this.onDragMove.bind(this), { passive: false });
+                this.container.addEventListener('touchend', this.onDragEnd.bind(this));
+                
+                this.container.addEventListener('wheel', this.onWheel.bind(this), { passive: false });
+                
+                window.addEventListener('resize', () => {
+                    this.width = this.container.clientWidth;
+                    this.height = this.container.clientHeight;
+                    this.render();
+                });
+                
+                document.getElementById('zoomIn')?.addEventListener('click', () => {
+                    this.setZoom(this.zoom + 1);
+                });
+                
+                document.getElementById('zoomOut')?.addEventListener('click', () => {
+                    this.setZoom(this.zoom - 1);
+                });
+                
+                this.container.addEventListener('dblclick', (e) => {
+                    const rect = this.container.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    
+                    const center = this.latLonToPixel(this.lat, this.lon, this.zoom);
+                    const clickX = center.x + this.dragOffset.x + (x - this.width / 2);
+                    const clickY = center.y + this.dragOffset.y + (y - this.height / 2);
+                    
+                    const clickPos = this.pixelToLatLon(clickX, clickY, this.zoom);
+                    this.setZoom(this.zoom + 1, clickPos.lat, clickPos.lon);
+                });
+            }
+            
+            // Drag start
+            onDragStart(e) {
+                this.isDragging = true;
+                this.container.classList.add('dragging');
+                
+                const point = e.touches ? e.touches[0] : e;
+                this.dragStart = { 
+                    x: point.clientX - this.dragOffset.x, 
+                    y: point.clientY - this.dragOffset.y
+                };
+                
+                if (e.touches) e.preventDefault();
+            }
+            
+            // Drag move
+            onDragMove(e) {
+                if (!this.isDragging) return;
+                
+                const point = e.touches ? e.touches[0] : e;
+                this.dragOffset = {
+                    x: point.clientX - this.dragStart.x,
+                    y: point.clientY - this.dragStart.y
+                };
+                
+                this.render();
+                if (e.touches) e.preventDefault();
+            }
+            
+            // Drag end
+            onDragEnd(e) {
+                if (!this.isDragging) return;
+                
+                this.isDragging = false;
+                this.container.classList.remove('dragging');
+                
+                const center = this.latLonToPixel(this.lat, this.lon, this.zoom);
+                const newCenter = this.pixelToLatLon(
+                    center.x + this.dragOffset.x,
+                    center.y + this.dragOffset.y,
+                    this.zoom
+                );
+                
+                this.lat = newCenter.lat;
+                this.lon = newCenter.lon;
+                this.dragOffset = { x: 0, y: 0 };
+                
+                this.render();
+                this.update
+
+            if (e.touches) {
+                e.preventDefault();
+            }
+        }
+        
+        // Drag move
+        onDragMove(e) {
+            if (!this.isDragging) return;
+            
+            const point = e.touches ? e.touches[0] : e;
+            this.dragOffset = {
+                x: point.clientX - this.dragStart.x,
+                y: point.clientY - this.dragStart.y
+            };
+            
+            this.render();
+            
+            if (e.touches) {
+                e.preventDefault();
+            }
+        }
+        
+        // Drag end
+        onDragEnd(e) {
+            if (!this.isDragging) return;
+            
+            this.isDragging = false;
+            this.container.classList.remove('dragging');
+            
+            // Update center position based on drag offset
+            const center = this.latLonToPixel(this.lat, this.lon, this.zoom);
+            const newCenter = this.pixelToLatLon(
+                center.x + this.dragOffset.x,
+                center.y + this.dragOffset.y,
+                this.zoom
+            );
+            
+            this.lat = newCenter.lat;
+            this.lon = newCenter.lon;
+            this.dragOffset = { x: 0, y: 0 };
+            
+            this.render();
+            this.updateCoords();
+        }
+        
+        // Wheel zoom
+        onWheel(e) {
+            e.preventDefault();
+            
+            const delta = -Math.sign(e.deltaY);
+            const rect = this.container.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            // Calculate the position under the mouse
+            const center = this.latLonToPixel(this.lat, this.lon, this.zoom);
+            const mouseX = center.x + this.dragOffset.x + (x - this.width / 2);
+            const mouseY = center.y + this.dragOffset.y + (y - this.height / 2);
+            
+            const mousePos = this.pixelToLatLon(mouseX, mouseY, this.zoom);
+            
+            // Zoom to that position
+            this.setZoom(this.zoom + delta, mousePos.lat, mousePos.lon);
+        }
+    }
+    
+    // Initialize map with default view (world view centered at 0,0)
+    // You can change these values to start at a different location
+    const map = new OSMMap('map', {
+        lat: 51.505,   // London latitude
+        lon: -0.09,    // London longitude
+        zoom: 13,
+        minZoom: 2,
+        maxZoom: 18
+    });
+    
+    // Expose map instance to window for debugging/external control
+    window.map = map;
+    
+    // Example: Pan to a specific location after 3 seconds
+    // setTimeout(() => {
+    //     map.panTo(40.7128, -74.0060); // New York
+    //     map.setZoom(12);
+    // }, 3000);
+    
+</script>
+  </body> </html>
+          
